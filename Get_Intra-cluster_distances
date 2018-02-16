@@ -1,0 +1,144 @@
+import gzip
+import math
+
+
+# function which takes a sim_mat and reduces it to the upper triangle
+# the sim_mat can be calculated in the Get_components script
+
+def simmat2triangle(simmat_path):
+    # check if the file is in square format
+    
+    if simmat_path[-3:] == '.gz':
+        with gzip.open(simmat_path, mode = 'r') as f:
+            l_row1 = len(f.readline().split())
+            l_row2 = len(f.readline().split())
+            assert l_row1 == l_row2
+    else:
+        with open(simmat_path, mode = 'r') as f:
+            l_row1 = len(f.readline().split())
+            l_row2 = len(f.readline().split())
+            assert l_row1 == l_row2
+    
+    if simmat_path[-3:] == '.gz':
+        with gzip.open(simmat_path, mode = 'r') as f:
+            new_path = simmat_path[:-3] + '[triangle].gz'
+            with gzip.open(new_path, mode = 'w') as g:
+                read_line = f.readline().decode()
+                MAX_ROWS = len(read_line.split())
+                
+                write_line = read_line.split()[1:]
+                write_line = [float(el) for el in write_line]
+                write_line = str(write_line)
+                write_line = write_line[1:-1].replace(',',' ') +'\n'
+                write_line = str.encode(write_line)
+                g.write(write_line)
+                for i in range(2,MAX_ROWS):
+                    read_line = f.readline().decode()
+                    write_line = read_line.split()[1:]
+                    write_line = [float(el) for el in write_line]
+                    write_line = str(write_line)
+                    write_line = write_line[1:-1].replace(',',' ') + '\n'
+                    write_line = str.encode(write_line)
+                    g.write(write_line)
+                    if i % 10000==0:
+                        print('Got to the {}-th line!'.format(i-1))
+                        
+                
+    else:
+        #with open.(simmat_path, mode = 'r') as f:
+        return
+        
+        
+# get a list of matrix indices        
+        
+def get_upper_triangle(integer = 5, index_list = None):
+    upper_triangle = []
+    
+    if index_list:
+        iter_list = index_list
+    else:
+        iter_list = list(range(integer))
+        
+    for i in iter_list:
+        for j in iter_list:
+            if j>i:
+                upper_triangle.append([i,j])
+    return upper_triangle
+    
+
+# transform the indices to a dictionary, where the key is the row and the values are all the columns to visit for each row
+def get_index_dict(index_pairs):
+    index_dict = dict()
+    
+    row_indices = [el[0] for el in index_pairs]
+    row_indices = set(row_indices)
+    for i in row_indices:
+        column_indices = [el[1] for el in index_pairs if el[0] == i]
+        index_dict[str(i)] = column_indices
+    return index_dict
+        
+
+
+# get the intra-cluster distance for an upper triangle matrix [i<j] (as e.g. calculated by simmat2triangle)
+# the component should contain the indices of the words
+# the similarity matri has to be unzipped, for better performance!
+
+def get_intracluster_distance_triangle(component, simmat_path):
+    
+    # Initialization
+    start = time.time()
+    
+    # contains all index_pairs to visit for the component
+    index_pairs = get_upper_triangle(index_list = component)
+    NUM_PAIRS = len(index_pairs)
+    # transform index_pairs to a dictionary {row: columns}
+    index_dict  = get_index_dict(index_pairs)            
+    
+    
+    # if the index_dict is empty, it means the component is only a single element - None will be returned
+    try:
+        MAX_ROW = max([int(el) for el in index_dict.keys()])
+    except ValueError:
+        print('The intracluster_distance is 1: 0°. The cluster is a single element.')
+        return
+    
+    index = 0
+    s_index = str(index)
+    
+    similarities = []
+    with open(simmat_path, mode = 'r') as f: # gzip für die gezippte sim mat
+        
+        while index <= MAX_ROW: # may also be coded as for loop
+            line = f.readline()
+            if s_index in index_dict.keys():
+                line = line.split()
+                line = np.array(line, dtype = 'f2')      # read into a numpy 1-D array
+                get_sims = line[index_dict[s_index]]
+                similarities.append(get_sims)
+            index += 1
+            s_index = str(index)
+    
+    # sum up all similarities
+    sums = sum([sum(el) for el in similarities])
+    # divide by the number of pairs
+    intracluster_distance = sums/NUM_PAIRS
+    # convert the result into degrees
+    rad = math.acos(intracluster_distance)
+    intracluster_distance_deg = math.degrees(rad)
+    end = time.time()
+    
+    print('Took me:',end-start, 'seconds.')
+    print('Radians/Degrees:')
+    return intracluster_distance, intracluster_distance_deg
+
+
+
+####################################################################
+
+simmat_path = ''
+
+# get an upper-triangle of the similarity matrix for speed up
+simmat2triangle(simmat_path)
+
+# unzip the upper tringle
+    
