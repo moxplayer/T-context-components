@@ -143,5 +143,6 @@ simmat_path = ''
 # get an upper-triangle of the similarity matrix for speed up
 simmat2triangle(simmat_path)
 
-# unzip the upper tringle
+# unzip the upper triangle
     
+simmat2triangle('test(full).gz')# outputs 'test(full)[triangle].gz'
