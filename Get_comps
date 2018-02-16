@@ -1,0 +1,294 @@
+import pandas as pd
+import numpy as np
+import math, time, gzip
+
+# insert the path to the LexVec embedding
+path_lex =''
+
+
+# loads and embedding in the standard format
+# if pandas = True, load as pandas DataFrame
+# returns words and vectors separately
+
+def load_embedding(filepath, pandas = False):
+    if pandas:
+        import pandas
+    
+    words   = []
+    vectors = []
+    
+    with open(filepath, mode = 'r') as f:
+        vocab_size, emb_dim = f.readline().split()
+        print('Trying to read in an {}-dimensional embedding with {} vocab words.'.format(emb_dim, vocab_size))
+        for line in f:
+            word   = line.split()[0]
+            vector = [float(el) for el in line.split()[1:]]
+            
+            words.append(word)
+            vectors.append(vector)
+        if pandas:
+            vectors = pd.DataFrame(vectors, index= words)
+        
+        return words, vectors
+
+def save_array(np_array, f_path):
+    start = time.time()
+    try:
+        np.savetxt(fname = f_path, X = np_array, delimiter = ' ')
+        end = time.time()
+        print('Writing the output took me: {} seconds.'.format(end-start)) 
+    except:
+        print('Saving failed!')
+    return
+
+# naive matrix, this does not work with the 26GB sized file!
+# sim_mat =  np.loadtxt('test(full).gz', dtype = 'f2', delimiter = ' ')
+# raises a memory error!
+
+
+# reads a line as np.array (1-D)
+
+def load_np_line(opened_file):
+    line = opened_file.readline().split()
+    line = np.array(line, dtype = 'f2')
+    return line
+    
+    
+# the dictionary, pushes the key to the comp and pull the first element of the comp_buffer as the new key
+
+def dict_push(buffer_dict, s_index):
+    i = int(s_index)
+    
+    next_ind        = buffer_dict[s_index][0][0]             # pick first element of the comp_buffer
+    s_next_ind      = str(next_ind)
+    new_comp_buffer = buffer_dict[s_index][0][1:]             # pick the rest as new comp_buffer 
+    new_comp        = buffer_dict[s_index][1].copy()
+    new_comp.append(i)                                      # append the prior ind to the comp
+    buffer_dict[s_next_ind] = [new_comp_buffer, new_comp]       # add a new dictionary entry
+    
+    del buffer_dict[s_index]                                 # delete the prior dictionary entry
+    return buffer_dict
+    
+# increases the buffer of dictionary entry
+    
+def add_buffer(buffer_dict, buffer, s_index):
+    current_comp_buffer = buffer_dict[s_index][0]
+    union = set(current_comp_buffer).union(set(buffer))
+    new_comp_buffer = sorted(list(union))
+    buffer_dict[s_index][0] = np.array(new_comp_buffer)   # buffers 
+    return buffer_dict
+    
+    
+    
+# append_component reads in an input similarity matrix and gives the indices of context components for a given
+# similarity threshold T
+
+# works probably 1st feb 2018
+
+def get_components(mat_path, T):
+    import gzip
+    import numpy as np
+    
+    start = time.time()
+    
+    with gzip.open(mat_path, mode = 'r') as f:
+        
+        # initialization
+        line = load_np_line(f)
+        MAX_IND = len(line)
+        mat_length  = len(line)
+        mat_buffer  = list(range(mat_length)) #the mat_buffer is the list of list elements which might be new components
+        comp_buffer = []
+        components = []
+        buffer_dict = dict()
+        index = 0
+        s_index = str(index)
+       
+        # comp_buffer = { next_ind : [comp_buffer,comp]} 
+        # processed to:
+        # new_comp_buffer = { comp_buffer[0] : [comp_buffer[1:], comp+[next_ind]]}
+        
+        
+        # while mat_buffer and buffer_dict are non-empty
+        while mat_buffer or buffer_dict: 
+        
+            # if no line has been loaded, load line
+            if not line.any(): 
+                line = load_np_line(f)
+            
+            # set diagonal to zero
+            line[i] = 0
+            
+            # get indices of vectors which are close to vec_index;
+            pre_buffer = np.where(line>T)[0]    
+            # intersect the pre_buffer with the mat_buffer, do not count indices double
+            pre_buffer = [el for el in pre_buffer if el in mat_buffer] 
+            # convert to numpy array
+            buffer = np.array(pre_buffer)
+            
+                                   
+            # if a component had been started previously...
+            if s_index in buffer_dict.keys():
+            
+                # if the buffer is empty, nothing is to be added to the component
+                if not buffer.any():                  
+                    # if the buffer_dict is non-empty a mere 'push' may be performed
+                    if buffer_dict[s_index][0].any():
+                        buffer_dict = dict_push(buffer_dict, s_index)  
+                        
+                # if the comp_buffer : buffer_dict[s_index][0] (type = np.array) is empty we finalize the component
+                    else:
+                        comp = buffer_dict[s_index][1].copy()
+                        comp.append(index)
+                        components.append(comp)
+                        del buffer_dict[s_index]
+                        
+                # if the buffer is non-empty      
+                else:
+                    # add the buffer to the comp_buffer
+                    buffer_dict = add_buffer(buffer_dict, buffer, s_index)
+                    # do a dictionary push
+                    buffer_dict = dict_push(buffer_dict, s_index)
+
+    
+            # if no component had been started previously...
+            else:
+                # if some elements are close to vec_index but nothing has been found to be close yet
+                # start a new dictionary entry
+                if buffer.any():
+                    s_buff = str(buffer[0])
+                    buffer_dict[s_buff] = [buffer[1:], [index]]
+                          
+                # else:  no elements are close to vec_index: make a single-element component
+                else:
+                    components.append([index])
+        
+            
+            # delete line after every iteration of the while loop:
+            line = np.array([])                   
+            
+            # adjust the mat_buffer: delete the buffer elements from the mat_buffer
+            for i in range(len(buffer)):
+                if mat_buffer.count(buffer[i])!= 0:
+                    mat_buffer.remove(buffer[i])
+            if mat_buffer.count(index) != 0:
+                mat_buffer.remove(index)
+                
+            del buffer
+            
+            index += 1                 
+            # break condition: the while loop may as well be formulated as a for loop
+            if index > MAX_IND:
+                break
+            s_index = str(index)
+            
+            if index % 1000 == 0:
+                print('Got to line {} !'.format(index))
+    end = time.time()
+    print('Calculating the components of {} with threshold {} took me {} seconds.'.format(mat_path,T,end-start))
+    return components
+
+# saves calculated 'components' in the designated path 'fname'
+# the format is: component[sep = ','] \n component [sep = ','] ...
+
+def save_components(components, fname):
+    with open(fname, mode='w') as f:
+        for component in components:
+            s_line = str(component)[1:-1]# [1,2,3] --> '1,2,3'
+            s_line += '\n'
+            f.write(s_line)
+    return
+
+def load_components(fname):
+    components = []
+    with open(fname, mode = 'r') as f:
+        for line in f:
+            line = line[:-1]
+            component = line.split(',')
+            component = [int(c) for c in component]
+            components.append(component)
+    return components
+
+# for a given components list of lists gain the total count as a checksum.
+def check_comp_length(components):
+    count = 0
+    for component in components:
+        count += len(component)
+    return count
+
+# for components get the corresponding word components
+# components as a list of lists
+# words is a list, not a dictionary!
+
+def get_word_components(components, words):
+    word_components = []
+    for component in components:
+        word_component = [words[i] for i in component]
+        word_components.append(word_component)
+    return word_components
+
+# calculate the number of elements over all T-components
+
+def get_comps_length(comps):
+    length = 0
+    for comp in comps:
+        length += len(comp)
+    return length
+
+#######################################################################
+
+
+
+words, vectors = load_embedding(path_lex, pandas = False)
+
+# normalize vectors
+
+start = time.time()
+emb   = np.array(vectors, dtype = 'f2')
+norms = np.apply_along_axis(np.linalg.norm, 1 , emb)
+np_emb = emb.T/norms
+np_emb = np_emb.T
+end = time.time()
+
+print('Normalization took me: {} seconds.'.format(end-start))
+
+# free RAM
+del norms
+del emb
+
+# calculate similarity matrix
+start = time.time()
+res = np.matmul(np_emb, np_emb.T)
+end = time.time()
+
+print('took me:',end-start, 'seconds.')
+
+# save the similarity matrix
+save_array(res, 'similarity_matrix.gz') 
+
+# free RAM
+del res
+
+
+# calculate T-components for T in {0.1, 0.2, 0.3,... ,0.9}
+COMPS = []
+for i in range(9):
+    j = (i+1)/10
+    comps = get_components('test(full).gz' , j)
+    
+    # print control number, if the total number is not constant, something went wrong
+    print(get_comps_length(comps))
+    
+    # save the components
+    save_components(comps,'Context_components_T={}'.format(str(j)))
+    COMPS.append(comps)
+
+
+# get the amount of T-components for all T
+lengths = []
+for comps in COMPS:
+    lengths.append(len(comps))
+    print(len(comps))
+    
+
+
